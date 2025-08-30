@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme{
+  --color-primary:#E54477;
+}
+
+.reset-tw, .reset-tw *{
+  all: revert !important;
+}
+
+.cl-drawerRoot{
+  z-index: 10;
+}
