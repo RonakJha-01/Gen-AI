@@ -4,8 +4,10 @@ import { clerkClient } from "@clerk/express";
 import axios from "axios";
 import{v2 as cloudinary} from "cloudinary";
 import FormData from "form-data";
-import fs from 'fs'
-import pdf from 'pdf-parse/lib/pdf-parse.js'
+import fs from 'fs';
+import pdf from 'pdf-parse/lib/pdf-parse.js';
+import Groq from "groq-sdk";
+
 
 const AI = new OpenAI({
     apiKey: process.env.GEMINI_API_KEY,
@@ -15,6 +17,78 @@ const AI = new OpenAI({
 
 
 
+
+
+
+
+
+
+const chatting = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+export const Chat = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt, length = 300 } = req.body;
+    const plan = req.plan;
+    const free_usage = req.free_usage;
+
+    // Free usage check
+    if (plan !== "premium" && free_usage >= 10) {
+      return res.json({
+        success: false,
+        message:
+          "Your free limit has reached. Upgrade your plan to continue the journey.",
+      });
+    }
+
+    const completion = await chatting.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: length,
+    });
+
+    const content = completion.choices[0].message.content;
+
+    // Save to DB
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, ${prompt}, ${content}, 'chat')
+    `;
+
+    // Update free usage
+    if (plan !== "premium") {
+      await clerkClient.users.updateUserMetadata(userId, {
+        privateMetadata: {
+          free_usage: free_usage + 1,
+        },
+      });
+    }
+
+    res.json({ success: true, content });
+
+  } catch (error) {
+    console.error("Groq Error:", error.message);
+    res.json({
+      success: false,
+      message: "AI service is temporarily unavailable.",
+    });
+  }
+};
+
+
+
+
+
+
+/*
 
 export const Chat  = async (req , res)=>{
     try{
@@ -28,7 +102,7 @@ export const Chat  = async (req , res)=>{
         }
 
         const response = await AI.chat.completions.create({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     messages: [
         {
             role: "user",
@@ -63,6 +137,7 @@ await sql `INSERT INTO creations (user_id, prompt, content, type)
 
     }
 }
+    */
 
 
 
@@ -71,53 +146,68 @@ await sql `INSERT INTO creations (user_id, prompt, content, type)
 
 
 
-export const BlogTitles  = async (req , res)=>{
-    try{
-        const{userId} = req.auth();
-        const{prompt} = req.body;
-        const plan = req.plan;
-        const free_usage = req.free_usage;
 
-        if(plan !== 'premium' && free_usage >= 10){
-            return res.json({success: false, message: "Your free limit has reached. Upgrade your plan to continue the journey."})
-        }
 
-        const response = await AI.chat.completions.create({
-    model: "gemini-2.0-flash",
-    messages: [
-        {
-            role: "user",
-            content: prompt,
-        },
-    ],
-    temperature:0.7,
-    max_tokens: 100,
+const blogGenerator = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
 });
 
-const content = response.choices[0].message.content
+export const BlogTitles = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt } = req.body;
+    const plan = req.plan;
+    const free_usage = req.free_usage;
 
-await sql `INSERT INTO creations (user_id, prompt, content, type)
- VALUES(${userId}, ${prompt}, ${content},'blog-title') `
-
- if(plan !== 'premium'){
-    await clerkClient.users.updateUserMetadata(userId,{
-        privateMetadata:{
-            free_usage: free_usage + 1
-        }
-    })
- }
-
-   res.json({success:true, content})
-
-
-    } catch(error){
-
-        console.log(error.message)
-        res.json({success:false, message:error.message})
-
-
+    // Free usage check
+    if (plan !== "premium" && free_usage >= 10) {
+      return res.json({
+        success: false,
+        message:
+          "Your free limit has reached. Upgrade your plan to continue the journey.",
+      });
     }
-}
+
+    const completion = await blogGenerator.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 100,
+    });
+
+    const content = completion.choices[0].message.content;
+
+    // Save to DB
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, ${prompt}, ${content}, 'blog-title')
+    `;
+
+    // Update free usage
+    if (plan !== "premium") {
+      await clerkClient.users.updateUserMetadata(userId, {
+        privateMetadata: {
+          free_usage: free_usage + 1,
+        },
+      });
+    }
+
+    res.json({ success: true, content });
+
+  } catch (error) {
+    console.error("Groq BlogTitles Error:", error.message);
+    res.json({
+      success: false,
+      message: "AI service is temporarily unavailable.",
+    });
+  }
+};
+
 
 
 
@@ -295,7 +385,7 @@ export const ReviewResume  = async (req , res)=>{
         Resume Content:\n\n${pdfData.text}`
 
           const response = await AI.chat.completions.create({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     messages: [
         {
             role: "user",
