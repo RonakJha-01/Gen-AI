@@ -7,12 +7,10 @@ import FormData from "form-data";
 import fs from 'fs';
 import pdf from 'pdf-parse/lib/pdf-parse.js';
 import Groq from "groq-sdk";
+import { GoogleGenAI } from "@google/genai";
 
 
-const AI = new OpenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"
-});
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 
 
@@ -44,7 +42,7 @@ export const Chat = async (req, res) => {
     }
 
     const completion = await chatting.chat.completions.create({
-      model: "llama-3.1-8b-instant",
+      model: "llama-3.3-70b-versatile",
       messages: [
         {
           role: "user",
@@ -169,7 +167,7 @@ export const BlogTitles = async (req, res) => {
     }
 
     const completion = await blogGenerator.chat.completions.create({
-      model: "llama-3.1-8b-instant",
+      model: "llama-3.3-70b-versatile",
       messages: [
         {
           role: "user",
@@ -363,54 +361,78 @@ await sql `INSERT INTO creations (user_id, prompt, content, type)
 
 
 
-export const ReviewResume  = async (req , res)=>{
-    try{
-        const { userId } = req.auth();
-        const resume = req.file;
-        const plan = req.plan;
-        
-
-        if(plan !== 'premium'){
-            return res.json({success: false, message: "Subscribe to access the premium feature."})
-        }
-
-        if(resume.size > 5 * 1024 * 1024){
-            return res.json({success:false, message: "File exceeds limit of (5mb)."})
-        }
-
-        const dataBuffer = fs.readFileSync(resume.path)
-        const pdfData = await pdf(dataBuffer)
-
-        const prompt = `Review my resume. 
-        Resume Content:\n\n${pdfData.text}`
-
-          const response = await AI.chat.completions.create({
-    model: "gemini-2.5-flash",
-    messages: [
-        {
-            role: "user",
-            content: prompt,
-        },
-    ],
-    temperature:0.7,
-    max_tokens: 1000,
-});
-
-const content = response.choices[0].message.content
 
 
-await sql `INSERT INTO creations (user_id, prompt, content, type)
- VALUES(${userId}, 'Review the resume' , ${content},'resume-review') `;
+export const ReviewResume = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const resume = req.file;
+    const plan = req.plan;
 
- 
-   res.json({success:true, content})
-
-
-    } catch(error){
-
-        console.log(error.message)
-        res.json({success:false, message:error.message})
-
-
+    if (plan !== "premium") {
+      return res.json({
+        success: false,
+        message: "Subscribe to access the premium feature.",
+      });
     }
-}
+
+    if (resume.size > 5 * 1024 * 1024) {
+      return res.json({
+        success: false,
+        message: "File exceeds limit of (5mb).",
+      });
+    }
+
+
+    // Pass PDF binary directly to Gemini!
+     const dataBuffer = fs.readFileSync(resume.path);
+
+    const payload = {
+      contents: [
+        {
+          inlineData: {
+            mimeType: "application/pdf",
+            data: dataBuffer.toString("base64"),
+          },
+        },
+        "Review this resume and give actionable feedback for ATS optimization.",
+      ],
+    };
+
+    let response;
+    try {
+      // 1. Try the primary frontier model first
+      response = await ai.models.generateContent({
+        model: "gemini-3.7-flash",
+        ...payload
+      });
+    } catch (primaryError) {
+      // 2. If it fails with a 503 high demand or capacity error, fallback immediately
+      if (primaryError.status === 503 || primaryError.message.includes("503") || primaryError.message.includes("demand")) {
+        console.warn("Primary model busy, falling back to gemini-3.5-flash-lite...");
+        
+        response = await ai.models.generateContent({
+          model: "gemini-3.5-flash-lite",
+          ...payload
+        });
+      } else {
+        // If it's a different error (like a bad API key), throw it immediately
+        throw primaryError;
+      }
+    }
+
+
+    const content = response.text;
+
+    // Save to Database
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type)
+      VALUES (${userId}, 'Review the resume', ${content}, 'resume-review')
+    `;
+
+    res.json({ success: true, content });
+  } catch (error) {
+    console.error("Resume Review Error:", error.message);
+    res.json({ success: false, message: error.message });
+  }
+};
